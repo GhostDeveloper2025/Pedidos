@@ -1,10 +1,9 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Gerenciador de Pedidos de Peças</title>
-    <!-- Usando a versão 9 do Firebase SDK para melhor performance e recursos -->
     <script src="https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.0.0/firebase-firestore-compat.js"></script>
     <style>
@@ -117,21 +116,52 @@
             height: 18px;
         }
 
-        .checkbox-container {
+        .checkbox-container, .checkbox-container-control {
             display: flex;
             align-items: center;
             gap: 10px;
         }
 
-            .checkbox-container input[type="checkbox"] {
+            .checkbox-container input[type="checkbox"],
+            .checkbox-container-control input[type="checkbox"] {
                 width: 20px;
                 height: 20px;
                 cursor: pointer;
             }
-
-        .item.pedido-feito {
+        /* Estilo para itens marcados como "Pedido Feito" */
+        /*.item.pedido-feito {
             opacity: 0.5;
             text-decoration: line-through;
+        }*/
+        /* Esconde itens "Pedido Feito" por padrão (quando o checkbox de controle não está marcado) */
+        /*.item.pedido-feito.hide-feito {
+                display: none;
+            }*/
+
+        /* Estilo para itens marcados como "Pedido Feito" */
+        .item.pedido-feito {
+            background-color: #161616; /* Um fundo um pouco mais escuro */
+            border-left: 4px solid #d32f2f; /* Borda vermelha para indicar "feito" */
+            /* Removemos os estilos antigos */
+            /* opacity: 0.5; */
+            /* text-decoration: line-through; */
+        }
+
+            /* Opcional: Também podemos deixar o código verde mais apagado */
+            .item.pedido-feito .codigo {
+                color: #B80C1F; /* Muda o código de verde para cinza */
+            }
+
+        /* style pra mostrar contagem lista*/
+        .lista-info {
+            width: 90%;
+            max-width: 900px;
+            margin-top: 20px; /* Espaço acima */
+            margin-bottom: -20px; /* Puxa a lista para perto */
+            color: #E06921; /* Cor verde para destacar */
+            font-weight: bold;
+            font-size: 16px;
+            height: 20px; /* Altura fixa para não "pular" */
         }
     </style>
 </head>
@@ -161,7 +191,14 @@
             <option value="DeWalt">DeWalt (Stanley, Black & Decker)</option>
             <option value="Bosch">Bosch (Skil, Dremel)</option>
         </select>
+
+        <div class="checkbox-container-control">
+            <input type="checkbox" id="mostrarFeitos" />
+            <label for="mostrarFeitos">Mostrar pedidos já feitos</label>
+        </div>
     </div>
+    
+    <div class="lista-info" id="lista-contador"></div>
 
     <div class="lista" id="lista"></div>
 
@@ -178,32 +215,68 @@
 
         firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
-        // Usaremos a coleção 'itens_semana' conforme a imagem, mas a lógica será aplicada
         const pedidosRef = db.collection("itens_semana");
 
         const form = document.getElementById("form");
         const lista = document.getElementById("lista");
         const msg = document.getElementById("msg");
         const filtroMarca = document.getElementById("filtroMarca");
+        const mostrarFeitos = document.getElementById("mostrarFeitos"); // Pega o novo checkbox
 
         // --- Funções de Data e Semana ---
-
-        // Retorna a data de início da semana (segunda-feira) para o controle de ciclo
-        function getStartOfWeek(date) {
-            const d = new Date(date);
-            const day = d.getDay(); // 0 = Domingo, 1 = Segunda, ..., 6 = Sábado
-            const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Ajusta para a Segunda-feira
-            d.setDate(diff);
-            d.setHours(0, 0, 0, 0);
-            return d;
-        }
 
         // Retorna a data de 10 dias atrás para o ciclo de repetição
         function getTenDaysAgo() {
             const d = new Date();
             d.setDate(d.getDate() - 10);
+            d.setHours(0, 0, 0, 0); // Zera o horário para comparar
             return d;
         }
+
+        // --- LÓGICA DE ATUALIZAÇÃO DE 10 DIAS ---
+
+        /**
+         * Verifica itens pedidos há mais de 10 dias e os "desmarca" (pedidoFeito: false).
+         * Isso permite que eles sejam pedidos novamente.
+         * Roda uma vez quando a página é carregada.
+         */
+        async function verificarEAtualizarPedidosAntigos() {
+            console.log("Verificando pedidos antigos (mais de 10 dias)...");
+            const dezDiasAtras = getTenDaysAgo();
+            const timestampDezDiasAtras = firebase.firestore.Timestamp.fromDate(dezDiasAtras);
+
+            // Consulta por itens que foram pedidos E cuja data do pedido é anterior a 10 dias atrás
+            // ⚠️ ISSO EXIGE UM ÍNDICE NO FIRESTORE: (pedidoFeito, dataPedido)
+            try {
+                const snapshot = await pedidosRef
+                    .where("pedidoFeito", "==", true)
+                    .where("dataPedido", "<", timestampDezDiasAtras)
+                    .get();
+
+                if (snapshot.empty) {
+                    console.log("Nenhum pedido antigo para atualizar.");
+                    return;
+                }
+
+                // Usamos um Batch para atualizar todos de uma vez (mais eficiente)
+                const batch = db.batch();
+                snapshot.forEach(doc => {
+                    console.log(`Atualizando item ${doc.id} (código ${doc.data().codigo}) para 'pedidoFeito: false'`);
+                    batch.update(doc.ref, {
+                        pedidoFeito: false,
+                        dataPedido: firebase.firestore.FieldValue.delete() // Remove a data do pedido
+                    });
+                });
+
+                await batch.commit();
+                console.log(`Foram atualizados ${snapshot.size} itens.`);
+
+            } catch (error) {
+                console.error("Erro ao verificar pedidos antigos:", error);
+                msg.textContent = "Erro ao atualizar ciclo de 10 dias. Verifique o console e os índices do Firestore.";
+            }
+        }
+
 
         // --- Renderização da Lista ---
 
@@ -211,37 +284,71 @@
             lista.innerHTML = "";
             let pedidosDaSemana = [];
             const marcaFiltrada = filtroMarca.value;
+            const verFeitos = mostrarFeitos.checked; // Verifica o estado do novo checkbox
+
+            //snapshot.forEach(doc => {
+            //    const item = doc.data();
+            //    // Filtro por marca (se houver)
+            //    if (marcaFiltrada && item.marca !== marcaFiltrada) {
+            //        return;
+            //    }
+            //    pedidosDaSemana.push({ id: doc.id, ...item });
 
             snapshot.forEach(doc => {
                 const item = doc.data();
-                // Filtro por marca
+                // Filtro por marca (se houver)
                 if (marcaFiltrada && item.marca !== marcaFiltrada) {
                     return;
                 }
                 pedidosDaSemana.push({ id: doc.id, ...item });
             });
+            //
+            // --- NOVO CÓDIGO DO CONTADOR ---
+            // Pega o elemento do contador
+            const contadorElement = document.getElementById("lista-contador");
+            const totalItens = pedidosDaSemana.length;
 
-            // Ordenar por marca para facilitar a visualização do filtro
+            // Atualiza o texto com base no número de itens
+            if (totalItens === 0) {
+                contadorElement.textContent = "Nenhum item para exibir.";
+            } else if (totalItens === 1) {
+                contadorElement.textContent = "Exibindo 1 item.";
+            } else {
+                contadorElement.textContent = `Exibindo ${totalItens} itens.`;
+            }
+
+            //
+            // Ordenar por marca para facilitar a visualização
             pedidosDaSemana.sort((a, b) => a.marca.localeCompare(b.marca));
 
             pedidosDaSemana.forEach(item => {
                 const div = document.createElement("div");
-                div.className = `item ${item.pedidoFeito ? 'pedido-feito' : ''}`;
+
+                let classes = "item";
+                if (item.pedidoFeito) {
+                    classes += " pedido-feito";
+                    if (!verFeitos) {
+                        // Adiciona classe para esconder se não quisermos ver os feitos
+                        classes += " hide-feito";
+                    }
+                }
+                div.className = classes;
+
 
                 // Formatar a data de criação para exibição
                 const dataCriacao = item.criadoEm ? item.criadoEm.toDate().toLocaleDateString('pt-BR') : 'N/A';
 
                 div.innerHTML = `
-                        <div class="info">
-                            <span class="codigo">${item.codigo}</span> - ${item.descricao}<br>
-                            Marca: ${item.marca} | Qtd: ${item.quantidade} | Adicionado em: ${dataCriacao}
-                        </div>
-                        <div class="checkbox-container">
-                            <label for="pedido-${item.id}">Pedido Feito</label>
-                            <input type="checkbox" id="pedido-${item.id}" data-id="${item.id}" ${item.pedidoFeito ? 'checked' : ''} />
-                        </div>
-                        <button class="excluir" data-id="${item.id}">Excluir</button>
-                    `;
+                                    <div class="info">
+                                        <span class="codigo">${item.codigo}</span> - ${item.descricao}<br>
+                                        Marca: ${item.marca} | Qtd: ${item.quantidade} | Adicionado em: ${dataCriacao}
+                                    </div>
+                                    <div class="checkbox-container">
+                                        <label for="pedido-${item.id}">Pedido Feito</label>
+                                        <input type="checkbox" id="pedido-${item.id}" data-id="${item.id}" ${item.pedidoFeito ? 'checked' : ''} />
+                                    </div>
+                                    <button class="excluir" data-id="${item.id}">Excluir</button>
+                                `;
                 lista.appendChild(div);
             });
 
@@ -262,9 +369,11 @@
                     const pedidoFeito = e.target.checked;
                     const updateData = {
                         pedidoFeito: pedidoFeito,
+                        // Se marcou, salva a data. Se desmarcou, apaga a data.
                         dataPedido: pedidoFeito ? firebase.firestore.Timestamp.fromDate(new Date()) : firebase.firestore.FieldValue.delete()
                     };
                     await pedidosRef.doc(id).update(updateData);
+                    // O listener onSnapshot vai recarregar a lista automaticamente
                 });
             });
         }
@@ -274,44 +383,36 @@
         let unsubscribe;
 
         function setupListener() {
-            // Filtra:
-            // 1. Apenas itens que NÃO foram marcados como "pedidoFeito"
-            // 2. OU itens que foram marcados como "pedidoFeito" há mais de 10 dias (para poderem ser pedidos novamente)
-            // Infelizmente, o Firestore não permite consultas OR complexas ou NOT, então faremos a filtragem principal no cliente.
-            // A consulta principal será para todos os itens que não foram pedidos ou que foram pedidos há mais de 10 dias.
-
-            // Para a lógica de "itens que foram pedidos há mais de 10 dias", precisamos de uma consulta de intervalo.
-            // Vamos simplificar a consulta inicial para pegar todos os itens que NÃO foram pedidos.
-            // A lógica de 10 dias será aplicada no momento da adição (para evitar repetição) e na renderização (para mostrar/ocultar).
-
-            // Consulta principal: Itens que NÃO foram marcados como pedidos.
-            // Como a lógica de ciclo é complexa, vamos buscar todos os itens e filtrar no cliente.
-            // Isso é aceitável para um volume pequeno de dados.
-            // Se o volume for grande, a regra de segurança do Firestore deve ser usada para limitar o acesso.
-
-            // Para a lógica de ciclo semanal, vamos buscar todos os itens.
-            // A lógica de não-repetição será aplicada no momento da adição.
-
-            // Para a visualização, vamos buscar todos os itens e filtrar no cliente.
-            // A consulta será ordenada por marca e código para facilitar a visualização.
-            const query = pedidosRef.orderBy("marca").orderBy("codigo");
-
+            // Se já houver um listener, remove
             if (unsubscribe) {
-                unsubscribe(); // Remove o listener anterior
+                unsubscribe();
             }
 
+            // Pega o estado dos filtros
+            const verFeitos = mostrarFeitos.checked;
+
+            let query;
+
+            if (verFeitos) {
+                // Se o usuário QUER VER pedidos feitos, mostramos TODOS
+                // (a filtragem de marca será feita no renderLista)
+                query = pedidosRef.orderBy("marca").orderBy("codigo");
+            } else {
+                // Se o usuário NÃO quer ver pedidos feitos (visão padrão),
+                // mostramos APENAS os que NÃO foram feitos.
+                // ⚠️ ISSO EXIGE UM ÍNDICE NO FIRESTORE: (pedidoFeito, marca)
+                query = pedidosRef
+                    .where("pedidoFeito", "==", false)
+                    .orderBy("marca")
+                    .orderBy("codigo");
+            }
+
+            // Cria o novo listener
             unsubscribe = query.onSnapshot(renderLista, error => {
                 console.error("Erro ao buscar pedidos:", error);
-                msg.textContent = "Erro ao carregar a lista de pedidos.";
+                msg.textContent = "Erro ao carregar a lista. Verifique o console e os índices do Firestore.";
             });
         }
-
-        // Inicializa o listener
-        setupListener();
-
-        // Adiciona listener para o filtro de marca
-        filtroMarca.addEventListener("change", setupListener);
-
 
         // --- Lógica de Adição de Pedido (com validação de não-repetição) ---
 
@@ -328,89 +429,77 @@
                 return;
             }
 
-            // 1. Validação de não-repetição na lista ATUAL (mesmo código)
+            // 1. Validação de não-repetição
             const duplicadoAtual = await pedidosRef.where("codigo", "==", codigo).get();
+
             if (!duplicadoAtual.empty) {
-                // Verificar se o item duplicado já foi pedido há menos de 10 dias
+                // Se encontrou um item com o mesmo código
                 const itemExistente = duplicadoAtual.docs[0].data();
+                const docId = duplicadoAtual.docs[0].id;
 
                 if (itemExistente.pedidoFeito) {
+                    // O item existe, mas já foi pedido.
+                    // A função verificarEAtualizarPedidosAntigos() já deve ter limpado se tiver > 10 dias.
+                    // Mas vamos checar de novo por segurança.
                     const dataPedido = itemExistente.dataPedido.toDate();
                     const dezDiasAtras = getTenDaysAgo();
 
                     if (dataPedido > dezDiasAtras) {
-                        // Foi pedido há menos de 10 dias, não pode ser adicionado
+                        // Foi pedido há MENOS de 10 dias, não pode ser adicionado
                         msg.textContent = `⚠️ Este código foi pedido em ${dataPedido.toLocaleDateString('pt-BR')} e só poderá ser adicionado novamente após ${new Date(dataPedido.getTime() + 10 * 24 * 60 * 60 * 1000).toLocaleDateString('pt-BR')}.`;
                         return;
                     }
-                    // Se foi pedido há mais de 10 dias, pode ser adicionado novamente.
-                    // Neste caso, vamos apenas atualizar a quantidade do item existente.
-                    await pedidosRef.doc(duplicadoAtual.docs[0].id).update({
-                        quantidade: firebase.firestore.FieldValue.increment(quantidade),
-                        // Remove o status de pedido feito para entrar na lista da semana
-                        pedidoFeito: false,
+
+                    // Se chegou aqui, foi pedido há MAIS de 10 dias (ou a data foi limpa)
+                    // Vamos reativar o item na lista de pedidos
+                    await pedidosRef.doc(docId).update({
+                        quantidade: firebase.firestore.FieldValue.increment(quantidade), // Soma a quantidade
+                        descricao: descricao, // Atualiza a descrição
+                        marca: marca, // Atualiza a marca
+                        pedidoFeito: false, // Reativa na lista de pendentes
                         dataPedido: firebase.firestore.FieldValue.delete(),
-                        // Atualiza a data de criação para a data atual
-                        criadoEm: firebase.firestore.Timestamp.fromDate(new Date())
+                        criadoEm: firebase.firestore.Timestamp.fromDate(new Date()) // Atualiza a data de "adição"
                     });
-                    msg.textContent = "✅ Quantidade do item existente atualizada e re-adicionado à lista de pedidos!";
-                    form.reset();
-                    setTimeout(() => msg.textContent = "", 4000);
-                    return;
+
+                    msg.textContent = "✅ Item re-adicionado à lista de pedidos com quantidade atualizada!";
 
                 } else {
-                    // Item duplicado e NÃO foi pedido.
-                    // A lógica do usuário é: "o produto nao pode se repetir e tem que ter um ciclo"
-                    // Vamos considerar que se ele já está na lista da semana, ele não pode ser adicionado novamente.
+                    // Item duplicado e NÃO foi pedido (pedidoFeito == false)
                     msg.textContent = "⚠️ Este código já está na lista de pedidos desta semana!";
                     return;
                 }
+
+            } else {
+                // 2. Se não há duplicado, adicionar o novo pedido
+                await pedidosRef.add({
+                    marca,
+                    codigo,
+                    descricao,
+                    quantidade,
+                    criadoEm: firebase.firestore.Timestamp.fromDate(new Date()),
+                    pedidoFeito: false, // Novo item entra como pendente
+                });
+
+                msg.textContent = "✅ Peça adicionada com sucesso!";
             }
 
-            // 2. Validação de ciclo semanal (adicionar apenas se for segunda-feira ou se a data de criação for da semana atual)
-            // O usuário quer que pedidos de terça em diante fiquem para a próxima semana.
-            // Isso implica que a lista ATUAL é a lista da semana que começou na última segunda-feira.
-            // Para simplificar, vamos usar a regra: se for segunda-feira, a lista é zerada (ou a data de ciclo é atualizada).
-            // Como não temos um backend para gerenciar o ciclo, vamos focar na regra de não-repetição e no status de pedido.
-            // A regra de "terça em diante fica para a próxima semana" é mais complexa e sugere um sistema de "lista atual" e "próxima lista".
-            // Para manter a simplicidade do código front-end, vamos focar na regra de não-repetição e 10 dias.
 
-            // Para a regra de "terça em diante", o usuário pode simplesmente não adicionar o item na lista 'itens_semana'
-            // e usar uma coleção 'itens_proxima_semana' ou adicionar um campo 'semana' com a data da próxima segunda-feira.
-            // Vamos manter a coleção única e adicionar o campo 'semanaInicio' para controle.
-
-            const hoje = new Date();
-            const diaDaSemana = hoje.getDay(); // 0 = Domingo, 1 = Segunda
-
-            let semanaInicio;
-            if (diaDaSemana === 1) { // Segunda-feira
-                semanaInicio = getStartOfWeek(hoje);
-            } else if (diaDaSemana >= 2) { // Terça a Domingo
-                // Se for de terça em diante, o item é para a próxima semana.
-                // A próxima semana começa na próxima segunda-feira.
-                const proximaSegunda = new Date(hoje);
-                proximaSegunda.setDate(hoje.getDate() + (8 - diaDaSemana)); // (8 - diaDaSemana) calcula os dias até a próxima segunda
-                semanaInicio = getStartOfWeek(proximaSegunda);
-            } else { // Domingo (0)
-                // Domingo é considerado como parte da semana que está terminando.
-                semanaInicio = getStartOfWeek(hoje);
-            }
-
-            // Adicionar o novo pedido
-            await pedidosRef.add({
-                marca,
-                codigo,
-                descricao,
-                quantidade,
-                criadoEm: firebase.firestore.Timestamp.fromDate(hoje),
-                semanaInicio: firebase.firestore.Timestamp.fromDate(semanaInicio), // Para controle de ciclo
-                pedidoFeito: false, // Novo item nunca foi pedido
-            });
-
-            msg.textContent = "✅ Peça adicionada com sucesso!";
             form.reset();
-            setTimeout(() => msg.textContent = "", 2000);
+            setTimeout(() => msg.textContent = "", 4000);
         });
+
+
+        // --- Inicialização ---
+
+        // Adiciona listeners para os filtros recarregarem a lista
+        filtroMarca.addEventListener("change", setupListener);
+        mostrarFeitos.addEventListener("change", setupListener);
+
+        // Roda a verificação de 10 dias E inicializa a lista
+        verificarEAtualizarPedidosAntigos().then(() => {
+            setupListener(); // Carrega a lista principal
+        });
+
     </script>
 </body>
 </html>
